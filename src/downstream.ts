@@ -57,30 +57,30 @@ export function createDownstream(config: Config, emitter: EventEmitter<Downstrea
 			logger.logDisconnect(tid.toString());
 		});
 		const send = createSend(ws, compress);
-		emitter.on("message", (ev, col, raw) => {
+		emitter.on("message", (ev, col, raw, decompressed) => {
 			switch (ev.kind) {
 				case "account":
-					if (!onlyCommit) send(ev, raw);
+					if (!onlyCommit) send(raw, decompressed);
 					return;
 				case "identity":
-					if (!onlyCommit) send(ev, raw);
+					if (!onlyCommit) send(raw, decompressed);
 					return;
 				case "commit":
 					if (col == null) return;
-					if (allMode) return void send(ev, raw);
-					if (filter(col)) return void send(ev, raw);
+					if (allMode) return void send(raw, decompressed);
+					if (filter(col)) return void send(raw, decompressed);
 			}
 		});
 	});
 }
 
-function createSend(ws: WebSocket, compress = false): (ev: object, raw: RawData) => void {
+function createSend(ws: WebSocket, compress = false): (raw: RawData, decompressed: string) => void {
 	if (compress) {
-		return (ev, raw) => {
+		return (raw) => {
 			ws.send(raw);
 		};
 	}
-	return (ev, raw) => {
-		ws.send(JSON.stringify(ev));
+	return (_, decompressed) => {
+		ws.send(decompressed);
 	};
 }

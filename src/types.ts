@@ -4,9 +4,9 @@ import type { RawData } from "ws";
 
 export interface DownstreamEventMap {
 	message:
-		| [AccountEvent, undefined, RawData]
-		| [IdentityEvent, undefined, RawData]
-		| [CommitEvent<string>, string, RawData];
+		| [AccountEvent, undefined, RawData, string]
+		| [IdentityEvent, undefined, RawData, string]
+		| [CommitEvent<string>, string, RawData, string];
 	connect: [TID, Set<string> | "all"];
 	rejectConnect: [TID, string];
 	acceptConnect: [TID];

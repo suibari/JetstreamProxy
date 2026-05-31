@@ -2,7 +2,7 @@ import "./sea";
 import EventEmitter from "node:events";
 import { exit } from "node:process";
 import type { TID } from "@atproto/common-web";
-import { createDCtx, decompressUsingDict, freeDCtx, init } from "@bokuweb/zstd-wasm";
+import { DCtx, DDict, getFrameContentSize } from "zstd-napi/binding";
 import type { AccountEvent, CommitEvent, IdentityEvent } from "@skyware/jetstream";
 import { config } from "./config.js";
 import { createDownstream } from "./downstream.js";
@@ -15,13 +15,15 @@ async function main() {
 	const upstreamEmmitter = new EventEmitter<UpstreamEventMap>();
 	const downstreamEmmitter = new EventEmitter<DownstreamEventMap>();
 
-	await init();
-	const dict = await globalThis.getAsset("zstd_dictionary");
-	const decompress = (data: Buffer) => {
-		const dctx = createDCtx();
-		const raw = decompressUsingDict(dctx, data, dict);
-		freeDCtx(dctx);
-		return Buffer.from(raw).toString("utf-8");
+	const dictBuf = await globalThis.getAsset("zstd_dictionary");
+	const ddict = new DDict(dictBuf);
+	const dctx = new DCtx();
+	const decompress = (data: Buffer): string => {
+		const size = getFrameContentSize(data);
+		if (size === null) throw new Error("zstd: unknown frame content size");
+		const dst = Buffer.allocUnsafe(size);
+		dctx.decompressUsingDDict(dst, data, ddict);
+		return dst.toString("utf-8");
 	};
 	const clientMap = new Map<TID, Set<string> | "all">();
 
@@ -59,11 +61,11 @@ async function main() {
 		const decompressed = decompress(buff);
 		const data = JSON.parse(decompressed) as AccountEvent | IdentityEvent | CommitEvent<string>;
 		if (data.kind === "commit") {
-			downstreamEmmitter.emit("message", data, data.commit.collection, rawdata);
+			downstreamEmmitter.emit("message", data, data.commit.collection, rawdata, decompressed);
 		} else if (data.kind === "identity") {
-			downstreamEmmitter.emit("message", data, undefined, rawdata);
+			downstreamEmmitter.emit("message", data, undefined, rawdata, decompressed);
 		} else if (data.kind === "account") {
-			downstreamEmmitter.emit("message", data, undefined, rawdata);
+			downstreamEmmitter.emit("message", data, undefined, rawdata, decompressed);
 		} else {
 			logger.warn(`Unknown message kind received: ${JSON.stringify(data)}`);
 		}

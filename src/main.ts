@@ -2,7 +2,7 @@ import "./sea";
 import EventEmitter from "node:events";
 import { exit } from "node:process";
 import type { TID } from "@atproto/common-web";
-import { DCtx, DDict } from "zstd-napi/binding";
+import { createDCtx, decompressUsingDict, init } from "@bokuweb/zstd-wasm";
 import type { AccountEvent, CommitEvent, IdentityEvent } from "@skyware/jetstream";
 import { config } from "./config.js";
 import { createDownstream } from "./downstream.js";
@@ -15,13 +15,12 @@ async function main() {
 	const upstreamEmmitter = new EventEmitter<UpstreamEventMap>();
 	const downstreamEmmitter = new EventEmitter<DownstreamEventMap>();
 
-	const dictBuf = await globalThis.getAsset("zstd_dictionary");
-	const ddict = new DDict(dictBuf);
-	const dctx = new DCtx();
-	const dstBuf = Buffer.allocUnsafe(256 * 1024); // 256KB、1メッセージの上限として十分
+	await init();
+	const dict = await globalThis.getAsset("zstd_dictionary");
+	const dctx = createDCtx();
 	const decompress = (data: Buffer): string => {
-		const n = dctx.decompressUsingDDict(dstBuf, data, ddict);
-		return dstBuf.subarray(0, n).toString("utf-8");
+		const raw = decompressUsingDict(dctx, data, dict);
+		return Buffer.from(raw).toString("utf-8");
 	};
 	const clientMap = new Map<TID, Set<string> | "all">();
 

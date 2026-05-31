@@ -7,5 +7,4 @@ export const esbuildOption = {
 	target: "node20",
 	format: "cjs",
 	minify: false,
-	external: ["zstd-napi"],
 };

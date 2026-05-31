@@ -17,9 +17,9 @@
 	"license": "MIT",
 	"dependencies": {
 		"@atproto/common-web": "^0.4.18",
+		"@bokuweb/zstd-wasm": "^0.0.27",
 		"partysocket": "^1.1.16",
-		"ws": "^8.19.0",
-		"zstd-napi": "^0.0.12"
+		"ws": "^8.19.0"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.2.3",

@@ -2,7 +2,7 @@ import "./sea";
 import EventEmitter from "node:events";
 import { exit } from "node:process";
 import type { TID } from "@atproto/common-web";
-import { DCtx, DDict, getFrameContentSize } from "zstd-napi/binding";
+import { DCtx, DDict } from "zstd-napi/binding";
 import type { AccountEvent, CommitEvent, IdentityEvent } from "@skyware/jetstream";
 import { config } from "./config.js";
 import { createDownstream } from "./downstream.js";
@@ -18,12 +18,10 @@ async function main() {
 	const dictBuf = await globalThis.getAsset("zstd_dictionary");
 	const ddict = new DDict(dictBuf);
 	const dctx = new DCtx();
+	const dstBuf = Buffer.allocUnsafe(256 * 1024); // 256KB、1メッセージの上限として十分
 	const decompress = (data: Buffer): string => {
-		const size = getFrameContentSize(data);
-		if (size === null) throw new Error("zstd: unknown frame content size");
-		const dst = Buffer.allocUnsafe(size);
-		dctx.decompressUsingDDict(dst, data, ddict);
-		return dst.toString("utf-8");
+		const n = dctx.decompressUsingDDict(dstBuf, data, ddict);
+		return dstBuf.subarray(0, n).toString("utf-8");
 	};
 	const clientMap = new Map<TID, Set<string> | "all">();
 

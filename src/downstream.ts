@@ -7,7 +7,7 @@ import type { Config, DownstreamEventMap } from "./types.js";
 import { createFilter } from "./util.js";
 
 export function createDownstream(config: Config, emitter: EventEmitter<DownstreamEventMap>) {
-	const server = new WebSocketServer({ port: config.proxyPort });
+	const server = new WebSocketServer({ port: config.proxyPort, perMessageDeflate: false });
 	server.on("error", (error) => {
 		logger.error(`Downstream server error: ${String(error)}`);
 	});

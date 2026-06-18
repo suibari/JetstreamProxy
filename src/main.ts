@@ -2,7 +2,7 @@ import "./sea";
 import EventEmitter from "node:events";
 import { exit } from "node:process";
 import type { TID } from "@atproto/common-web";
-import { createDCtx, decompressUsingDict, freeDCtx, init } from "@bokuweb/zstd-wasm";
+import { createDCtx, decompressUsingDict, init } from "@bokuweb/zstd-wasm";
 import type { AccountEvent, CommitEvent, IdentityEvent } from "@skyware/jetstream";
 import { config } from "./config.js";
 import { createDownstream } from "./downstream.js";
@@ -17,10 +17,9 @@ async function main() {
 
 	await init();
 	const dict = await globalThis.getAsset("zstd_dictionary");
-	const decompress = (data: Buffer) => {
-		const dctx = createDCtx();
+	const dctx = createDCtx();
+	const decompress = (data: Buffer): string => {
 		const raw = decompressUsingDict(dctx, data, dict);
-		freeDCtx(dctx);
 		return Buffer.from(raw).toString("utf-8");
 	};
 	const clientMap = new Map<TID, Set<string> | "all">();
@@ -59,11 +58,11 @@ async function main() {
 		const decompressed = decompress(buff);
 		const data = JSON.parse(decompressed) as AccountEvent | IdentityEvent | CommitEvent<string>;
 		if (data.kind === "commit") {
-			downstreamEmmitter.emit("message", data, data.commit.collection, rawdata);
+			downstreamEmmitter.emit("message", data, data.commit.collection, rawdata, decompressed);
 		} else if (data.kind === "identity") {
-			downstreamEmmitter.emit("message", data, undefined, rawdata);
+			downstreamEmmitter.emit("message", data, undefined, rawdata, decompressed);
 		} else if (data.kind === "account") {
-			downstreamEmmitter.emit("message", data, undefined, rawdata);
+			downstreamEmmitter.emit("message", data, undefined, rawdata, decompressed);
 		} else {
 			logger.warn(`Unknown message kind received: ${JSON.stringify(data)}`);
 		}

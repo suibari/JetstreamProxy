@@ -4,5 +4,5 @@ import esbuild from "esbuild";
 import { esbuildOption } from "./esbuild.config.mjs";
 
 esbuild.build(esbuildOption).then(() => {
-	exec("cp src/assets dist/ -r");
+	exec("cp src/assets dist/ -r && cp src/assets/zstd-wasm/zstd.wasm dist/zstd.wasm");
 });

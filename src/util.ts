@@ -99,6 +99,27 @@ export function parseNSID(nsid: string): { nsid: string; hasPrefix: boolean } | 
 	};
 }
 
+/**
+ * 上流の候補をカンマ区切りで受ける。
+ *
+ * 1本しか持たないと、そのインスタンスが不調なだけで再接続が延々空振りする。
+ * 順序は指定どおり保ち、先頭を本命として使う。1つでも不正なら全体を不正とする。
+ */
+export function parseUpstreamURLs(value: unknown): URL[] | false {
+	if (typeof value !== "string") return false;
+	const urls: URL[] = [];
+	for (const raw of value.split(",")) {
+		const candidate = raw.trim();
+		if (candidate.length === 0) continue;
+		const parsed = parseUpstreamURL(candidate);
+		if (parsed === false) return false;
+		// 同じ先を並べても切り替えの役に立たないので畳む。
+		if (!urls.some((url) => url.toString() === parsed.toString())) urls.push(parsed);
+	}
+	if (urls.length === 0) return false;
+	return urls;
+}
+
 export function parseUpstreamURL(url: unknown): URL | false {
 	if (typeof url !== "string") return false;
 	if (/\s/.test(url)) return false;
@@ -107,6 +128,43 @@ export function parseUpstreamURL(url: unknown): URL | false {
 	if (parsedURL.protocol !== "ws:" && parsedURL.protocol !== "wss:") return false;
 	if (parsedURL.hostname.length === 0) return false;
 	return parsedURL;
+}
+
+/**
+ * 既に配ったイベントを二度配らないための time_us ゲート。
+ *
+ * upstream は再接続のたびに cursor で巻き戻すので、これが無いと「切断中の穴埋め」が
+ * そのまま「配信済みイベントの再配信」になり、cursor を持たない bot が同じ投稿へ
+ * 二度反応してしまう。
+ *
+ * 初期位置は、クライアントが cursor を指定していればその値、指定が無ければ接続時点の
+ * 最新位置（＝ここから先だけを配る）。どちらも無ければ素通しする。
+ */
+export function createTimeGate(initial: number | undefined) {
+	let last = Number.isFinite(initial) ? initial : undefined;
+	return {
+		/**このイベントをまだ配っていないか */
+		allows: (timeUs: number | undefined): boolean => timeUs == null || last == null || timeUs > last,
+		/**実際に配った位置を進める。配らなかったイベントでは進めない */
+		accept: (timeUs: number | undefined): void => {
+			if (timeUs != null && (last == null || timeUs > last)) last = timeUs;
+		},
+		get last(): number | undefined {
+			return last;
+		},
+	};
+}
+
+/**
+ * クライアントが指定した cursor。読めなければ fallback（接続時点の最新位置）へ倒す。
+ *
+ * time_us は unix マイクロ秒なので 0 以下はあり得ない。`?cursor=` のような空指定を
+ * Number("")===0 として受けると、ゲートが実質無効になり巻き戻し分を再配信してしまう。
+ */
+export function parseClientCursor(value: string | null, fallback: number | undefined): number | undefined {
+	if (value == null) return fallback;
+	const parsed = Number(value.trim());
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 export function parsePort(port: unknown): number | false {

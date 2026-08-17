@@ -3,10 +3,10 @@ import type { EventEmitter } from "node:events";
 import { TID } from "@atproto/common-web";
 import { type RawData, type WebSocket, WebSocketServer } from "ws";
 import { logger } from "./logger.js";
-import type { Config, DownstreamEventMap } from "./types.js";
-import { createFilter } from "./util.js";
+import type { Config, CursorState, DownstreamEventMap } from "./types.js";
+import { createFilter, createTimeGate, parseClientCursor } from "./util.js";
 
-export function createDownstream(config: Config, emitter: EventEmitter<DownstreamEventMap>) {
+export function createDownstream(config: Config, emitter: EventEmitter<DownstreamEventMap>, cursor: CursorState) {
 	const server = new WebSocketServer({ port: config.proxyPort, perMessageDeflate: false });
 	server.on("error", (error) => {
 		logger.error(`Downstream server error: ${String(error)}`);
@@ -32,6 +32,30 @@ export function createDownstream(config: Config, emitter: EventEmitter<Downstrea
 			ws.close(4000, "bad collection");
 			return;
 		}
+		// upstream の cursor 巻き戻しが、このクライアントへの再配信にならないようにする。
+		const gate = createTimeGate(parseClientCursor(sp.get("cursor"), cursor.last));
+		const onMessage: DownstreamEventMap["message"] extends unknown[]
+			? (...args: DownstreamEventMap["message"]) => void
+			: never = (ev, col, raw, decompressed) => {
+			const timeUs = typeof ev.time_us === "number" ? ev.time_us : undefined;
+			if (!gate.allows(timeUs)) return;
+			const forward = () => {
+				gate.accept(timeUs);
+				send(raw, decompressed);
+			};
+			switch (ev.kind) {
+				case "account":
+					if (!onlyCommit) forward();
+					return;
+				case "identity":
+					if (!onlyCommit) forward();
+					return;
+				case "commit":
+					if (col == null) return;
+					if (allMode) return void forward();
+					if (filter(col)) return void forward();
+			}
+		};
 		const onReject = (rejectid: TID, reason: string) => {
 			if (rejectid === tid) {
 				ws.removeAllListeners();
@@ -39,6 +63,7 @@ export function createDownstream(config: Config, emitter: EventEmitter<Downstrea
 				emitter.emit("disconnect", tid);
 				emitter.off("rejectConnect", onReject);
 				emitter.off("acceptConnect", onAccept);
+				emitter.off("message", onMessage);
 				logger.warn(`Client ${tid} rejected: ${reason}`);
 			}
 		};
@@ -51,26 +76,16 @@ export function createDownstream(config: Config, emitter: EventEmitter<Downstrea
 		emitter.emit("connect", tid, allMode ? "all" : wantedCollections);
 		ws.on("close", () => {
 			emitter.emit("disconnect", tid);
-			emitter.on("rejectConnect", onReject);
-			emitter.on("acceptConnect", onAccept);
+			// 切断したクライアント向けのリスナーは必ず外す。ここを on で登録し直すと、
+			// 再接続を繰り返すクライアントの分だけリスナーが積み上がる。
+			emitter.off("rejectConnect", onReject);
+			emitter.off("acceptConnect", onAccept);
+			emitter.off("message", onMessage);
 			ws.removeAllListeners();
 			logger.logDisconnect(tid.toString());
 		});
 		const send = createSend(ws, compress);
-		emitter.on("message", (ev, col, raw, decompressed) => {
-			switch (ev.kind) {
-				case "account":
-					if (!onlyCommit) send(raw, decompressed);
-					return;
-				case "identity":
-					if (!onlyCommit) send(raw, decompressed);
-					return;
-				case "commit":
-					if (col == null) return;
-					if (allMode) return void send(raw, decompressed);
-					if (filter(col)) return void send(raw, decompressed);
-			}
-		});
+		emitter.on("message", onMessage);
 	});
 }
 

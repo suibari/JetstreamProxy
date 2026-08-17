@@ -1,5 +1,13 @@
 import { describe, expect, test } from "vitest";
-import { createFilter, parseNSID, parsePort, parseUpstreamURL } from "../src/util.js";
+import {
+	createFilter,
+	createTimeGate,
+	parseClientCursor,
+	parseNSID,
+	parsePort,
+	parseUpstreamURL,
+	parseUpstreamURLs,
+} from "../src/util.js";
 
 // https://atproto.com/ja/specs/nsid
 // https://github.com/bluesky-social/jetstream?tab=readme-ov-file#consuming-jetstream
@@ -183,6 +191,35 @@ describe("Upstream URL parse", () => {
 	);
 });
 
+describe("Upstream URL list parse", () => {
+	test("単一指定は従来どおり1件として扱う", () =>
+		expect(parseUpstreamURLs("wss://example.com/subscribe")).toEqual([new URL("wss://example.com/subscribe")]));
+
+	test("指定順を保つ（先頭が本命）", () =>
+		expect(parseUpstreamURLs("ws://localhost:8000, wss://example.com/subscribe")).toEqual([
+			new URL("ws://localhost:8000"),
+			new URL("wss://example.com/subscribe"),
+		]));
+
+	test("空要素は無視し、重複は畳む", () =>
+		expect(parseUpstreamURLs("ws://a.example.com, ,ws://a.example.com,ws://b.example.com")).toEqual([
+			new URL("ws://a.example.com"),
+			new URL("ws://b.example.com"),
+		]));
+
+	// 1つでも不正なら、死んだ候補を掴んだまま起動しないよう全体を拒否する。
+	test.each([
+		["ws://ok.example.com,http://ng.example.com", false],
+		["", false],
+		[" , ", false],
+		[null, false],
+		[undefined, false],
+		[123, false],
+	] as [unknown, false][])("parseUpstreamURLs(%s) should return %j", (input, expected) =>
+		expect(parseUpstreamURLs(input)).toEqual(expected),
+	);
+});
+
 describe("Port parse", () => {
 	const testcases: [unknown, number | false][] = [
 		// 有効なポート番号
@@ -305,5 +342,64 @@ describe("create filter", () => {
 		expect(filter !== false && filter("app.bsky.graph.follow")).toBe(false);
 		// CACHEに含まれないもの
 		expect(filter !== false && filter("com.example.fooBar")).toBe(false);
+	});
+});
+
+describe("client cursor parse", () => {
+	test("指定が無ければ接続時点の最新位置を使う", () => expect(parseClientCursor(null, 100)).toBe(100));
+	test("数値として読める指定はそれを使う", () => expect(parseClientCursor("50", 100)).toBe(50));
+	// `?cursor=` を Number("")===0 として受けると、ゲートが実質無効になり巻き戻し分を再配信する。
+	test("読めない指定は接続時点の最新位置へ倒す", () => {
+		expect(parseClientCursor("abc", 100)).toBe(100);
+		expect(parseClientCursor("", 100)).toBe(100);
+		expect(parseClientCursor(" ", 100)).toBe(100);
+		expect(parseClientCursor("0", 100)).toBe(100);
+		expect(parseClientCursor("-1", 100)).toBe(100);
+	});
+	test("最新位置が無ければ undefined（＝素通し）", () => expect(parseClientCursor(null, undefined)).toBeUndefined());
+});
+
+describe("time gate", () => {
+	test("初期位置が無ければ素通しする", () => {
+		const gate = createTimeGate(undefined);
+		expect(gate.allows(1)).toBe(true);
+		gate.accept(1);
+		expect(gate.allows(2)).toBe(true);
+	});
+
+	test("初期位置以前は配らない（cursor指定クライアント）", () => {
+		const gate = createTimeGate(100);
+		expect(gate.allows(99)).toBe(false);
+		expect(gate.allows(100)).toBe(false);
+		expect(gate.allows(101)).toBe(true);
+	});
+
+	// upstream が cursor で巻き戻して再送しても、配信済みの分は落ちること。
+	test("配信済みイベントの再送を落とす", () => {
+		const gate = createTimeGate(undefined);
+		for (const t of [10, 20, 30]) {
+			expect(gate.allows(t)).toBe(true);
+			gate.accept(t);
+		}
+		expect(gate.allows(10)).toBe(false);
+		expect(gate.allows(30)).toBe(false);
+		// 穴埋めで届いた未配信の分だけは通す。
+		expect(gate.allows(31)).toBe(true);
+	});
+
+	test("配らなかったイベントでは位置を進めない", () => {
+		const gate = createTimeGate(10);
+		expect(gate.allows(20)).toBe(true);
+		// 送らずに次を見る（コレクション不一致で捨てた場合）
+		expect(gate.last).toBe(10);
+		gate.accept(20);
+		expect(gate.last).toBe(20);
+	});
+
+	test("time_us を持たないイベントは素通しし、位置も動かさない", () => {
+		const gate = createTimeGate(10);
+		expect(gate.allows(undefined)).toBe(true);
+		gate.accept(undefined);
+		expect(gate.last).toBe(10);
 	});
 });

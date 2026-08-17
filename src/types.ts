@@ -13,6 +13,8 @@ export interface DownstreamEventMap {
 	disconnect: [TID];
 }
 
+export type DownstreamMessageListener = (...args: DownstreamEventMap["message"]) => void;
+
 export interface UpstreamEventMap {
 	message: [WSRawMessage];
 	updateWantedCollections: [Set<string> | "all"];
@@ -30,8 +32,17 @@ export interface OptionUpdateMsg {
 
 export interface Config {
 	proxyPort: number;
-	upstreamURL: URL;
+	/**先頭が本命。繋がらない状態が続くと次の候補へ切り替える */
+	upstreamURLs: URL[];
 	logFile: string;
+}
+
+/**
+ * 転送済みイベントの最新 time_us。upstream の再接続時に cursor として使い、
+ * 切断中に流れたイベントを取り戻す。downstream は新規クライアントの初期位置に使う。
+ */
+export interface CursorState {
+	last?: number;
 }
 
 export type JetstreamEvent = AccountEvent | IdentityEvent | CommitEvent<string>;

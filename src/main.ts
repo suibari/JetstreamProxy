@@ -7,7 +7,7 @@ import type { AccountEvent, CommitEvent, IdentityEvent } from "@skyware/jetstrea
 import { config } from "./config.js";
 import { createDownstream } from "./downstream.js";
 import { logger } from "./logger.js";
-import type { DownstreamEventMap, UpstreamEventMap } from "./types.js";
+import type { CursorState, DownstreamEventMap, UpstreamEventMap } from "./types.js";
 import { createUpstream } from "./upstream.js";
 import { parseClientMap, validateMaxWantedCollection } from "./util.js";
 
@@ -23,6 +23,8 @@ async function main() {
 		return Buffer.from(raw).toString("utf-8");
 	};
 	const clientMap = new Map<TID, Set<string> | "all">();
+	// 転送した位置。upstream の再接続時の cursor と、新規クライアントの初期位置に使う。
+	const cursor: CursorState = {};
 
 	downstreamEmmitter.on("connect", (tid, wanted) => {
 		if (wanted !== "all") {
@@ -57,6 +59,10 @@ async function main() {
 		}
 		const decompressed = decompress(buff);
 		const data = JSON.parse(decompressed) as AccountEvent | IdentityEvent | CommitEvent<string>;
+		// クライアントへ配る前に進める。接続してきたクライアントは「ここから先」を受け取る。
+		if (typeof data.time_us === "number" && data.time_us > (cursor.last ?? 0)) {
+			cursor.last = data.time_us;
+		}
 		if (data.kind === "commit") {
 			downstreamEmmitter.emit("message", data, data.commit.collection, rawdata, decompressed);
 		} else if (data.kind === "identity") {
@@ -68,8 +74,8 @@ async function main() {
 		}
 	});
 
-	await createUpstream(config, upstreamEmmitter);
-	createDownstream(config, downstreamEmmitter);
+	await createUpstream(config, upstreamEmmitter, cursor);
+	createDownstream(config, downstreamEmmitter, cursor);
 }
 
 main();

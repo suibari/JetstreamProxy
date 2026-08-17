@@ -14,6 +14,11 @@ import { parseClientMap, validateMaxWantedCollection } from "./util.js";
 async function main() {
 	const upstreamEmmitter = new EventEmitter<UpstreamEventMap>();
 	const downstreamEmmitter = new EventEmitter<DownstreamEventMap>();
+	// 接続クライアント1つにつき message リスナーを1つ持つ fan-out ハブなので、
+	// 既定の「10個を超えたらリーク疑い」という警告は当てにならない。上限を外す。
+	// リスナーはクライアント切断時に off しているので、実際に増え続けることはない
+	// （接続/切断はログに出るので、増え続けていないかはそこで確認できる）。
+	downstreamEmmitter.setMaxListeners(0);
 
 	await init();
 	const dict = await globalThis.getAsset("zstd_dictionary");

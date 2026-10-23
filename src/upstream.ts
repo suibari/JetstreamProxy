@@ -15,13 +15,35 @@ const ROTATE_AFTER_MS = 20 * 1000;
  * 巻き戻し分はクライアント側の time_us ゲートで重複排除されるので、多めでも二重配信しない。
  */
 const REPLAY_US = 60 * 1000 * 1000;
+/**
+ * 購読中なのに上流から何も届かない状態がここまで続いたら、接続を張り直して次の候補へ移る。
+ *
+ * 上流は TCP を開いたまま送信だけ止めることがある。2026-10-23 は jetstream2.us-west が
+ * close も error も出さずに約9時間無通信になり、onclose 頼りのローテーションが一度も動かず
+ * 配下の bot が全員止まった。公式 Jetstream の post だけでも毎秒数十件流れるので、
+ * 1分の無音は異常とみなしてよい。
+ */
+const STALL_AFTER_MS = 60 * 1000;
+const STALL_CHECK_MS = 10 * 1000;
+const DUMMY_COLLECTION = "example.dummy.collection";
 
-export async function createUpstream(config: Config, emitter: EventEmitter<UpstreamEventMap>, cursor: CursorState) {
+export interface UpstreamOptions {
+	stallAfterMs?: number;
+	stallCheckMs?: number;
+}
+
+export async function createUpstream(
+	config: Config,
+	emitter: EventEmitter<UpstreamEventMap>,
+	cursor: CursorState,
+	{ stallAfterMs = STALL_AFTER_MS, stallCheckMs = STALL_CHECK_MS }: UpstreamOptions = {},
+) {
 	const wantedCollections = new Set<string>();
 	let allMode = false;
 	let index = 0;
 	let connected = false;
 	let rotateTimer: NodeJS.Timeout | null = null;
+	let lastMessageAt = Date.now();
 	const current = () => config.upstreamURLs[index];
 	const getURL = () => {
 		const url = new URL(current());
@@ -65,7 +87,29 @@ export async function createUpstream(config: Config, emitter: EventEmitter<Upstr
 		rotateTimer.unref?.();
 	};
 
+	/**
+	 * クライアントが居ない間（requireHello やダミー購読）は何も流れてこないのが正常なので、
+	 * 無通信を異常とみなすのは実際に何かを購読しているときだけ。
+	 */
+	const expectsEvents = () => allMode || Array.from(wantedCollections).some((c) => c !== DUMMY_COLLECTION);
+	const stallTimer = setInterval(() => {
+		if (!connected || !expectsEvents()) return;
+		const silentMs = Date.now() - lastMessageAt;
+		if (silentMs < stallAfterMs) return;
+		index = (index + 1) % config.upstreamURLs.length;
+		logger.warn(
+			`Upstream silent for ${Math.round(silentMs / 1000)}s, reconnecting to: ${current().toString()}`,
+		);
+		// 張り直しが繋がるまでの間に連続で発火しないよう、ここで計測をやり直す。
+		lastMessageAt = Date.now();
+		connected = false;
+		upstream.reconnect();
+		armRotate();
+	}, stallCheckMs);
+	stallTimer.unref?.();
+
 	upstream.onmessage = async (ev) => {
+		lastMessageAt = Date.now();
 		const raw: Blob | ArrayBuffer | string = ev.data;
 		if (raw instanceof Blob) {
 			const ab = await raw.arrayBuffer();
@@ -75,6 +119,8 @@ export async function createUpstream(config: Config, emitter: EventEmitter<Upstr
 		}
 	};
 	emitter.on("updateWantedCollections", (collections) => {
+		// 購読を変えた直後は流れ始めるまで待つ。何も購読していなかった間の無音を数えない。
+		lastMessageAt = Date.now();
 		if (collections === "all") {
 			allMode = true;
 			upstream.send(createOptionUpdateMsg(undefined));
@@ -83,7 +129,7 @@ export async function createUpstream(config: Config, emitter: EventEmitter<Upstr
 			allMode = false;
 			wantedCollections.clear();
 			for (const collection of collections) wantedCollections.add(collection);
-			if (wantedCollections.size === 0) wantedCollections.add("example.dummy.collection");
+			if (wantedCollections.size === 0) wantedCollections.add(DUMMY_COLLECTION);
 			upstream.send(createOptionUpdateMsg(wantedCollections));
 			logger.upstreamUpdate(wantedCollections);
 		}
@@ -106,6 +152,7 @@ export async function createUpstream(config: Config, emitter: EventEmitter<Upstr
 		to.unref?.();
 		upstream.onopen = () => {
 			connected = true;
+			lastMessageAt = Date.now();
 			if (rotateTimer) clearTimeout(rotateTimer);
 			rotateTimer = null;
 			logger.info(`Connected to upstream server: ${upstream.url}`);
@@ -147,7 +194,7 @@ function createOptionUpdateMsg(wantedCollections: Set<string> | undefined): stri
 		const msg: OptionUpdateMsg = {
 			type: "options_update",
 			payload: {
-				wantedCollections: ["example.dummy.collection"],
+				wantedCollections: [DUMMY_COLLECTION],
 			},
 		};
 		return JSON.stringify(msg);

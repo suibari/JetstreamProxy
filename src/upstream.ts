@@ -1,7 +1,7 @@
 // 主にJetstream本体サーバーとの通信
 import type EventEmitter from "node:events";
 import { WebSocket } from "partysocket";
-import WS from "ws";
+import { UpstreamWebSocket } from "./upstreamWebSocket.js";
 import { logger } from "./logger.js";
 import type { Config, CursorState, OptionUpdateMsg, UpstreamEventMap } from "./types.js";
 
@@ -45,7 +45,7 @@ export async function createUpstream(config: Config, emitter: EventEmitter<Upstr
 		}
 		return url.toString();
 	};
-	const upstream = new WebSocket(getURL, [], { WebSocket: WS });
+	const upstream = new WebSocket(getURL, [], { WebSocket: UpstreamWebSocket });
 
 	/**
 	 * partysocket は同じURLへ延々と繋ぎ直す。上流の1インスタンスが死んでいる場合はそれでは

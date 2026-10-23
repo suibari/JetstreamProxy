@@ -3,8 +3,6 @@ name: Biome lint and format
 on:
   pull_request:
     branches: [ "main" ]
-  schedule:
-    - cron: "24 14 * * 1"
   workflow_dispatch: 
 
 
